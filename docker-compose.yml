@@ -1,0 +1,140 @@
+name: perf-test
+
+services:
+  minio:
+    image: minio/minio
+    entrypoint:
+      - sh
+      - -euc
+      - |
+        mkdir -p /data/loki-data && \
+        mkdir -p /data/loki-ruler && \
+        minio server /data
+    environment:
+      - MINIO_ROOT_USER=loki
+      - MINIO_ROOT_PASSWORD=supersecret
+      - MINIO_PROMETHEUS_AUTH_TYPE=public
+      - MINIO_UPDATE=off
+    ports:
+      - 9000
+    volumes:
+      - ./data/minio:/data
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
+      interval: 15s
+      timeout: 20s
+      retries: 5
+  grafana-loki:
+    image: grafana/loki:3.3.1
+    command: "-config.file=/etc/loki/config.yml -target=all"
+    volumes:
+      - ./apps/grafana-loki/loki-config.yml:/etc/loki/config.yml
+    ports:
+      - 3101:3100
+      - 7946
+      - 9095
+    depends_on:
+      - minio
+    healthcheck:
+      test: [ "CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3100/ready || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  grafana-alloy:
+    image: grafana/alloy:v1.5.1
+    command: "run --server.http.listen-addr=0.0.0.0:12345 --storage.path=/var/lib/alloy/data /etc/alloy/config.alloy"
+    ports:
+      - 22555:12345
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./apps/grafana-alloy/config.alloy:/etc/alloy/config.alloy
+  grafana-prometheus:
+    image: prom/prometheus:v3.0.1
+    volumes:
+      - ./apps/grafana-prometheus/prometheus-config.yml:/etc/prometheus/prometheus.yml
+      - ./data/prometheus:/prometheus
+    ports:
+    - "30090:9090"
+  grafana-dashboard:
+    image: grafana/grafana:11.3.2
+    volumes:
+      - ./data/grafana:/var/lib/grafana
+    ports:
+      - "3000:3000"
+  dotnet-monitor-app1:
+    image: mcr.microsoft.com/dotnet/monitor:8
+    command: ["collect", "--no-auth"]
+    ports:
+      - "52323:52323"
+      - "52325:52325"
+    environment:
+      - DOTNETMONITOR_DiagnosticPort__ConnectionMode=Listen
+      - DOTNETMONITOR_Storage__DefaultSharedPath=/diag
+      - DOTNETMONITOR_Urls=http://+:52323
+      - DOTNETMONITOR_Metrics__Endpoints=http://+:52325
+      - Logging__Console__FormatterName=json
+    volumes:
+      - diagvol-app1:/diag
+    deploy:
+      resources:
+        reservations:
+          cpus: '0.050'
+          memory: 50M
+        limits:
+          cpus: '0.250'
+          memory: 256M
+  reverse-proxy:
+    image: traefik:3.2.1
+    command:
+      - "--ping"
+      - "--api.insecure=true"
+      - "--providers.docker.exposedByDefault=false"
+      - "--providers.docker.useBindPortIP=true"
+      - "--metrics.prometheus=true"
+      - "--metrics.prometheus.addentrypointslabels=true"
+      - "--metrics.prometheus.addrouterslabels=true"
+      - "--metrics.prometheus.addServicesLabels=true"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+    - "80:80"
+    - "443:443"
+    - "8079:8080"
+  app1:
+    image: app1
+    build:
+      dockerfile: ${PROJECT_DIR_ABS_PATH}/apps/app/dockerfile
+      context: ${APP1_SOLUTION_FOLDER_ABS_PATH}
+    container_name: app1
+    entrypoint: dotnet ${APP1_DLL_ENTRYPOINT}
+    environment:
+      - DOTNET_DiagnosticPorts=/diag/dotnet-monitor.sock
+      - ASPNETCORE_ENVIRONMENT=Test
+      - ASPNETCORE_URLS=http://+:8080
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.app1.rule=Host(`app1.localhost`)"
+      - "traefik.http.services.app1.loadbalancer.server.port=8080"
+    volumes:
+      - ${APP1_BIN_FOLDER_ABS_PATH}:/app
+      - ./data/app1:/docker-data
+      - diagvol-app1:/diag
+    logging:
+      driver: loki
+      options:
+        loki-url: http://host.docker.internal:3101/loki/api/v1/push
+        loki-retries: 5
+        loki-batch-size: 400
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 500M
+
+volumes:
+  diagvol-app1:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+

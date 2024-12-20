@@ -1,0 +1,1 @@
+/tools/dotMemoryclt/tools/dotmemory attach 1

@@ -1,0 +1,23 @@
+#escape=\
+
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS base
+
+# install dotMemory CLI
+RUN apt-get update && \
+apt-get install -y procps && \
+apt-get install -y wget && \
+apt-get install -y unzip && \
+mkdir /tools && \
+wget -O /tools/dotMemoryclt.zip https://www.nuget.org/api/v2/package/JetBrains.dotMemory.Console.linux-x64 && \
+unzip /tools/dotMemoryclt.zip -d /tools/dotMemoryclt && \
+chmod +x -R /tools/dotMemoryclt/*
+
+RUN cd /tools; \
+echo "/tools/dotMemoryclt/tools/dotmemory attach 1 --save-to-dir=/docker-data" >> dotmemory-attach.sh; \
+echo "/tools/dotMemoryclt/tools/dotmemory get-snapshot 1 --save-to-dir=/docker-data" >> dotmemory-getsnapshot.sh; \
+chmod +x -R /tools/dotmemory*.sh;
+
+WORKDIR /app
+
+EXPOSE 8080
+EXPOSE 443

@@ -1,0 +1,63 @@
+name: perf-test
+
+services:
+  dotnet-monitor-app2:
+    image: mcr.microsoft.com/dotnet/monitor:8
+    command: ["collect", "--no-auth"]
+    ports:
+      - "52327:52327"
+      - "52329:52329"
+    environment:
+      - DOTNETMONITOR_DiagnosticPort__ConnectionMode=Listen
+      - DOTNETMONITOR_Storage__DefaultSharedPath=/diag
+      - DOTNETMONITOR_Urls=http://+:52327
+      - DOTNETMONITOR_Metrics__Endpoints=http://+:52329
+      - Logging__Console__FormatterName=json
+    volumes:
+      - diagvol-app2:/diag
+    deploy:
+      resources:
+        reservations:
+          cpus: '0.050'
+          memory: 50M
+        limits:
+          cpus: '0.250'
+          memory: 256M
+  app2:
+    image: app2
+    build:
+      dockerfile: ${PROJECT_DIR_ABS_PATH}/apps/app/dockerfile
+      context: ${APP2_SOLUTION_FOLDER_ABS_PATH}
+    container_name: app2
+    entrypoint: dotnet ${APP2_DLL_ENTRYPOINT}
+    environment:
+      - DOTNET_DiagnosticPorts=/diag/dotnet-monitor.sock
+      - ASPNETCORE_ENVIRONMENT=Test
+      - ASPNETCORE_URLS=http://+:8080
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.app2.rule=Host(`app2.localhost`)"
+      - "traefik.http.services.app2.loadbalancer.server.port=8080"
+    volumes:
+      - ${APP2_BIN_FOLDER_ABS_PATH}:/app
+      - ./data/app2:/docker-data
+      - diagvol-app2:/diag
+    logging:
+      driver: loki
+      options:
+        loki-url: http://host.docker.internal:3101/loki/api/v1/push
+        loki-retries: 5
+        loki-batch-size: 400
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 500M
+
+volumes:
+  diagvol-app2:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+
